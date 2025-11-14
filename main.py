@@ -272,6 +272,10 @@ ax.set_yticks([])
 ax.set_aspect('equal', adjustable='box')
 ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N), fontsize=10, color=TEXT)
 
+# add FPS display text (top-left)
+fps_text = ax.text(0.02, 0.97, "", transform=ax.transAxes, color=TEXT, fontsize=9,
+                   ha='left', va='top', bbox=dict(facecolor=AX_BG, edgecolor='none', alpha=0.6))
+
 # controls column on the right: radio at top (row 0), sliders rows 1..n_sliders, button at last non-buffer row
 ax_radio = fig.add_subplot(gs[0, 1])
 ax_radio.set_facecolor(PANEL_BG)
@@ -419,11 +423,17 @@ def animate(frame):
     t1 = time.perf_counter()
     frame_times.append((t1 - t0)*1000.0)
     frame_count += 1
+    # compute short-term average (last 30 frames) for stable FPS reading
+    if frame_times:
+        recent = frame_times[-30:]
+        avg_ms = np.mean(recent)
+        fps = (1000.0 / avg_ms) if avg_ms > 0 else 0.0
+        fps_text.set_text(f"FPS: {fps:.1f}")
     if frame_count % 30 == 0:
         avg = np.mean(frame_times[-30:])
         print(f"avg frame time (last 30): {avg:.2f} ms")
     scat.set_offsets(pos)
-    return scat,
+    return scat, fps_text
 
 ani = animation.FuncAnimation(fig, animate, frames=10000, interval=1, blit=True)
 plt.show()
