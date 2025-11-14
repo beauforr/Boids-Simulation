@@ -4,7 +4,27 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.widgets import Slider, Button, RadioButtons
 import time
+import matplotlib.gridspec as gridspec
 
+# dark mode palette / rc settings
+BG = "#0b0f1a"        # figure background
+AX_BG = "#07111a"     # main axes background
+PANEL_BG = "#0f1720"  # control panel / widget axes
+WIDGET_BG = "#111827"
+ACCENT = "#4aa3ff"    # accent color for sliders / active radio
+TEXT = "#e6eef6"      # general text color
+
+plt.rcParams.update({
+    "figure.facecolor": BG,
+    "axes.facecolor": AX_BG,
+    "axes.edgecolor": TEXT,
+    "axes.labelcolor": TEXT,
+    "xtick.color": TEXT,
+    "ytick.color": TEXT,
+    "text.color": TEXT,
+    "savefig.facecolor": BG,
+    "grid.color": "#222832"
+})
 
 # JE MOET DINGEN UIT HET LABO GEBRUIKEN !!!!!!!!
 
@@ -23,6 +43,15 @@ margin = 100.0
 min_speed = 3.0
 max_speed = 6.0
 dt = 1.0
+
+# marker size (points^2 used by scatter 's' argument)
+marker_size = 2.0
+
+# mouse-follow parameters
+mouse_active = False
+mouse_pos = np.array([W/2.0, H/2.0])
+mouse_strength = 0.006   # steering magnitude scale (tune)
+mouse_range = 500.0      # pixels / units of the simulation
 
 # bias groups (some boids have bias to left (-1) or right (+1))
 fraction_biased = 0.05
@@ -44,24 +73,23 @@ def limit_speed(vx, vy, minspeed, maxspeed):
     scale = np.where(too_slow, minspeed / sp, scale)
     return vx * scale, vy * scale
 
-# ---------- Boids state ----------
-# positions and velocities as Nx arrays
-pos = np.random.rand(N, 2) * np.array([W, H])
-angles = np.random.rand(N) * 2 * np.pi
-vel = np.column_stack((np.cos(angles), np.sin(angles)))
-# scale initial velocities to avg speed ~ (min+max)/2
-v0 = (min_speed + max_speed) / 2.0
-vel *= v0
+# ---------- Boids state (replaced with re-usable initializer) ----------
+def create_boids(num):
+    global N, pos, angles, vel, bias_group, bias_val
+    N = int(max(1, round(num)))
+    # positions and velocities as Nx arrays
+    pos = np.random.rand(N, 2) * np.array([W, H])
+    angles = np.random.rand(N) * 2 * np.pi
+    vel = np.column_stack((np.cos(angles), np.sin(angles)))
+    # scale initial velocities to avg speed ~ (min+max)/2
+    v0 = (min_speed + max_speed) / 2.0
+    vel *= v0
+    bias_group = np.zeros(N, dtype=np.int8)  # 0 = none, 1 = right, -1 = left
+    bias_val = np.full(N, default_bias)
+    # do not randomize bias here; apply_bias_randomization() will be called later when UI is ready
 
-bias_group = np.zeros(N, dtype=np.int8)  # 0 = none, 1 = right, -1 = left
-bias_val = np.full(N, default_bias)
-# randomly choose some boids to be biased
-num_biased = int(N * fraction_biased)
-inds = np.random.choice(N, num_biased, replace=False)
-# split half right, half left
-half = num_biased // 2
-bias_group[inds[:half]] = 1
-bias_group[inds[half:]] = -1
+# create initial boids
+create_boids(N)
 
 # ---------- Spatial grid helper ----------
 def make_grid_index(pos, cell_size):
@@ -207,21 +235,12 @@ def update_grid(pos, vel):
 # use a reasonable figure size and smaller markers to reduce overlap
 fig_w = min(12, W / 150.0)
 fig_h = min(9, H / 150.0)
-fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-# smaller marker size, no edge linewidth, slight alpha to reduce dense-overlap look
-scat = ax.scatter(pos[:,0], pos[:,1], s=2, linewidths=0, alpha=0.85)
-ax.set_xlim(0, W)
-ax.set_ylim(0, H)
-ax.set_xticks([])
-ax.set_yticks([])
-ax.set_aspect('equal', adjustable='box')
-ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N), fontsize=10)
 
-# reserve right column for controls and room at bottom for sliders
-fig.subplots_adjust(left=0.05, right=0.75, top=0.95, bottom=0.38)
-
+# use GridSpec to create a left main plot and a right controls column
 # Slider configuration: (label, min, max, init)
 slider_specs = [
+    ("N", 10, 5000, N),
+    ("marker_size", 1.0, 40.0, marker_size),
     ("visual_range", 5.0, 200.0, visual_range),
     ("protected_range", 1.0, 50.0, protected_range),
     ("centering_factor", 0.0, 0.01, centering_factor),
@@ -234,50 +253,57 @@ slider_specs = [
     ("max_bias", 0.0, 0.05, max_bias),
 ]
 
-# place controls in the reserved right column and center them vertically
-sliders = {}
 n_sliders = len(slider_specs)
-height = 0.025
-gap = 0.01
-control_x = 0.76
-control_w = 0.22
-# define the vertical control area (within full figure coords)
-control_top = 0.92
-control_bottom = 0.06
-control_height = control_top - control_bottom
+# rows: 1 for radio, n_sliders for sliders, 1 for button, plus a small buffer row
+n_rows = max(6, 1 + n_sliders + 1 + 1)
+fig = plt.figure(figsize=(fig_w, fig_h))
+gs = gridspec.GridSpec(n_rows, 2, width_ratios=[4, 1], figure=fig, wspace=0.15, hspace=0.6)
 
-# sizes for radio and button
-radio_h = 0.06
-btn_h = 0.06
-spacing = 0.02  # spacing between groups
+# main axes on the left spanning all rows
+ax = fig.add_subplot(gs[:, 0])
+ax.set_facecolor(AX_BG)
+# use an explicit sizes array so we can update it at runtime
+sizes = np.full(N, marker_size)
+scat = ax.scatter(pos[:,0], pos[:,1], s=sizes, linewidths=0, alpha=0.95, c='#ffffff')
+ax.set_xlim(0, W)
+ax.set_ylim(0, H)
+ax.set_xticks([])
+ax.set_yticks([])
+ax.set_aspect('equal', adjustable='box')
+ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N), fontsize=10, color=TEXT)
 
-# total height needed: radio + spacing + sliders stack + spacing + button
-sliders_stack_h = n_sliders * height + (n_sliders - 1) * gap if n_sliders > 0 else 0.0
-total_needed = radio_h + spacing + sliders_stack_h + spacing + btn_h
-
-# compute start so the whole block is vertically centered in control area
-start_y = control_bottom + max(0.0, (control_height - total_needed) / 2.0)
-
-# place radio at the top of the block
-radio_y = start_y + sliders_stack_h + spacing + btn_h + spacing if False else start_y + sliders_stack_h + spacing + btn_h + spacing
-# (simplify: place radio above sliders)
-radio_y = start_y + sliders_stack_h + spacing + btn_h + spacing - btn_h - spacing + radio_h - radio_h
-# correct simpler placement:
-radio_y = start_y + sliders_stack_h + spacing + btn_h + spacing - radio_h
-ax_radio = fig.add_axes([control_x, radio_y, control_w, radio_h], facecolor='lightgoldenrodyellow')
-radio = RadioButtons(ax_radio, ('grid', 'naive'), active=0 if NEIGHBOR_METHOD=='grid' else 1)
-
-# place sliders stacked starting at start_y (bottom-up)
+# controls column on the right: radio at top (row 0), sliders rows 1..n_sliders, button at last non-buffer row
+ax_radio = fig.add_subplot(gs[0, 1])
+ax_radio.set_facecolor(PANEL_BG)
+radio = RadioButtons(ax_radio, ('grid', 'naive'), active=0 if NEIGHBOR_METHOD=='grid' else 1, activecolor=ACCENT)
+# ensure radio labels are visible on dark bg
+for lbl in radio.labels:
+    lbl.set_color(TEXT)
+# style slider axes and widgets
+sliders = {}
 for i, (name, mn, mx, init) in enumerate(slider_specs):
-    axpos = [control_x, start_y + i * (height + gap), control_w, height]
-    ax_sl = fig.add_axes(axpos)
+    ax_sl = fig.add_subplot(gs[1 + i, 1])
+    ax_sl.set_facecolor(PANEL_BG)
     s = Slider(ax_sl, name, mn, mx, valinit=float(init), valfmt='%1.4f')
+    # widget text colors
+    try:
+        s.label.set_color(TEXT)
+        s.valtext.set_color(TEXT)
+        s.ax.patch.set_facecolor(PANEL_BG)
+        s.poly.set_facecolor(ACCENT)
+    except Exception:
+        pass
     sliders[name] = s
 
-# place button below the sliders block (aligned with control_x)
-btn_y = start_y + sliders_stack_h + spacing
-ax_button = fig.add_axes([control_x, btn_y, control_w, btn_h])
-btn = Button(ax_button, 'Randomize Bias', color='lightblue', hovercolor='0.975')
+# place button near the bottom of the controls column
+ax_button = fig.add_subplot(gs[1 + n_sliders, 1])
+ax_button.set_facecolor(PANEL_BG)
+btn = Button(ax_button, 'Randomize Bias', color="#1f2a35", hovercolor="#26333f")
+# button label color
+try:
+    btn.label.set_color(TEXT)
+except Exception:
+    pass
 
 # helper to (re)assign bias groups/values
 def apply_bias_randomization():
@@ -304,7 +330,34 @@ apply_bias_randomization()
 def on_slider_change(val, name):
     global visual_range, protected_range, centering_factor, avoid_factor
     global matching_factor, turn_factor, min_speed, max_speed
-    global fraction_biased, max_bias
+    global fraction_biased, max_bias, N, marker_size, sizes
+    if name == "N":
+        newN = int(max(1, round(float(val))))
+        if newN != N:
+            create_boids(newN)
+            # apply bias after re-creating arrays
+            apply_bias_randomization()
+            # update scatter offsets and sizes for new N
+            try:
+                scat.set_offsets(pos)
+                sizes = np.full(N, marker_size)
+                scat.set_sizes(sizes)
+            except NameError:
+                pass
+            # update title to reflect new N
+            try:
+                ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N), color=TEXT)
+            except NameError:
+                pass
+        return
+    if name == "marker_size":
+        marker_size = float(val)
+        try:
+            sizes = np.full(N, marker_size)
+            scat.set_sizes(sizes)
+        except NameError:
+            pass
+        return
     if name == "visual_range":
         visual_range = float(val)
     elif name == "protected_range":
@@ -344,7 +397,7 @@ for name, s in sliders.items():
 def radio_changed(label):
     global NEIGHBOR_METHOD
     NEIGHBOR_METHOD = label
-    ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N))
+    ax.set_title("Boids CPU (method={}) N={}".format(NEIGHBOR_METHOD, N), color=TEXT)
 radio.on_clicked(radio_changed)
 
 def button_clicked(event):
@@ -382,3 +435,4 @@ if frame_times:
     print("Overall avg frame time (ms):", np.mean(frame_times))
     print("Median frame time (ms):", np.median(frame_times))
     print("Total frames:", frame_count, "wall-clock sec:", duration)
+    print("FPS (frames/sec):", frame_count / duration)
