@@ -208,6 +208,11 @@ def main():
   scat = ax.scatter(pos_x, pos_y, s=6.0, c='#4aa3ff')
   ax.set_xlim(0, W); ax.set_ylim(0, H); ax.set_aspect('equal')
   ax.set_xticks([]); ax.set_yticks([])
+  # FPS text: high-contrast boxed text so it's readable on dark background
+  fps_text = ax.text(0.02, 0.97, "", transform=ax.transAxes, color='#e6eef6', fontsize=9,
+                     ha='left', va='top', bbox=dict(facecolor='#0f1720', edgecolor='none', alpha=0.85))
+  # ensure title is visible
+  ax.set_title(f"GPU Boids N={N}", color='#e6eef6')
 
   # kernel launch params
   threads_per_block = 256
@@ -252,7 +257,8 @@ def main():
       recent = np.array(frame_times[-30:])
       avg_ms = recent.mean() if recent.size else 0.0
       fps = 1000.0 / avg_ms if avg_ms > 0 else 0.0
-      ax.set_title(f"GPU Boids N={N} FPS={fps:.1f}")
+      # update boxed FPS text for readability on dark background
+      fps_text.set_text(f"FPS: {fps:.1f}")
       print(fps)
     return scat,
 
