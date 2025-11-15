@@ -1,4 +1,6 @@
-# boids_cpu.py
+# JE MOET DINGEN UIT HET LABO GEBRUIKEN !!!!!!!!
+# BENCHMARKS, VERSCHILLEN THREADS ETC ETC
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -26,15 +28,11 @@ plt.rcParams.update({
     "grid.color": "#222832"
 })
 
-# JE MOET DINGEN UIT HET LABO GEBRUIKEN !!!!!!!!
-
-# BENCHMARKS, VERSCHILLEN THREADS ETC ETC
-
 # ---------- Parameters ----------
-W, H = 2000, 1500
-N = 1500                      # number of boids (tune)
-visual_range = 40.0
-protected_range = 8.0
+W, H = 2000, 1500     # world size
+N = 1500        # initial number of boids                
+visual_range = 40.0 
+protected_range = 8.0 
 centering_factor = 0.0005
 avoid_factor = 0.05
 matching_factor = 0.05
@@ -46,12 +44,6 @@ dt = 1.0
 
 # marker size (points^2 used by scatter 's' argument)
 marker_size = 2.0
-
-# mouse-follow parameters
-mouse_active = False
-mouse_pos = np.array([W/2.0, H/2.0])
-mouse_strength = 0.006   # steering magnitude scale (tune)
-mouse_range = 500.0      # pixels / units of the simulation
 
 # bias groups (some boids have bias to left (-1) or right (+1))
 fraction_biased = 0.05
@@ -73,7 +65,7 @@ def limit_speed(vx, vy, minspeed, maxspeed):
     scale = np.where(too_slow, minspeed / sp, scale)
     return vx * scale, vy * scale
 
-# ---------- Boids state (replaced with re-usable initializer) ----------
+# ---------- Boids state ----------
 def create_boids(num):
     global N, pos, angles, vel, bias_group, bias_val
     N = int(max(1, round(num)))
