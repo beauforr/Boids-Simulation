@@ -1,19 +1,5 @@
-"""
-GPU boids simulation (PyCUDA) + matplotlib visualization.
-
-This script runs the boids update kernel on the GPU (naive O(N^2) neighbor checks)
-and visualizes positions in Python using Matplotlib. It's written for clarity and
-as a stepping stone to more advanced GPU implementations (spatial hashing, shared
-memory tiling, etc.).
-
-Usage (from `GPU/`):
-  source .venv/bin/activate   # activate your venv if needed
-  python main.py
-
-Notes:
-- This uses PyCUDA (pycuda) and requires a working CUDA toolchain and drivers.
-- The kernel is simple and intentionally mirrors the CPU logic for clarity.
-"""
+# gebruik dingen uit het labo !!!!!
+# BENCHMARKS
 
 import math
 import numpy as np
@@ -26,8 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 # ---------- Simulation parameters (mirror CPU defaults) ----------
-W, H = 8000, 5000
-N = 20000                      # number of boids (tune for your GPU)
+W, H = 2000, 1500
+N = 1500                   # number of boids
 visual_range = 40.0
 protected_range = 8.0
 centering_factor = 0.0005
@@ -67,7 +53,7 @@ def create_boids(num):
 
 
 # ---------- CUDA kernel (naive O(N^2) neighbor checks) ----------
-# Keep kernel readable - it mirrors the CPU update logic.
+# Keep kernel readable - it mirrors the CPU update logic
 kernel_code = r"""
 #include <math.h>
 extern "C" {
@@ -268,4 +254,3 @@ def main():
 
 if __name__ == '__main__':
   main()
-
