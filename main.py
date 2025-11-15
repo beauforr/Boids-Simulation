@@ -30,7 +30,7 @@ plt.rcParams.update({
 
 # ---------- Parameters ----------
 W, H = 2000, 1500     # world size
-N = 1500        # initial number of boids                
+N = 1500     # initial number of boids                
 visual_range = 40.0 
 protected_range = 8.0 
 centering_factor = 0.0005
@@ -51,7 +51,7 @@ max_bias = 0.01
 default_bias = 0.001
 
 # choose neighbor method: 'naive' or 'grid'
-NEIGHBOR_METHOD = 'grid'
+NEIGHBOR_METHOD = 'naive'
 
 # ---------- Utilities ----------
 def limit_speed(vx, vy, minspeed, maxspeed):
