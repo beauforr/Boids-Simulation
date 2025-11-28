@@ -232,7 +232,7 @@ def main():
   # PREDATOR scatter (Big Red Dot)
   scat_pred = ax.scatter([pred_pos[0]], [pred_pos[1]], [pred_pos[2]], s=150.0, c='red', edgecolors='white', depthshade=False)
 
-  ax.set_title(f"3D Boids vs Predator", color='#e6eef6')
+  ax.set_title(f"3D Foids vs Predator", color='#e6eef6')
   fps_text = ax.text2D(0.02, 0.95, "", transform=ax.transAxes, color='#e6eef6')
 
   threads_per_block = 128
