@@ -1,6 +1,3 @@
-# gebruik dingen uit het labo !!!!!
-# BENCHMARKS
-
 import math
 import numpy as np
 import time
@@ -13,7 +10,7 @@ import matplotlib.animation as animation
 
 # ---------- Simulation parameters (mirror CPU defaults) ----------
 W, H = 2000, 1500
-N = 1500                   # number of boids
+N = 500000                 # number of boids
 visual_range = 40.0
 protected_range = 8.0
 centering_factor = 0.0005
@@ -201,7 +198,7 @@ def main():
   ax.set_title(f"GPU Boids N={N}", color='#e6eef6')
 
   # kernel launch params
-  threads_per_block = 256
+  threads_per_block = 128
   blocks = (N + threads_per_block - 1) // threads_per_block
 
   frame_times = []

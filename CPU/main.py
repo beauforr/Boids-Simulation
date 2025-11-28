@@ -30,7 +30,7 @@ plt.rcParams.update({
 
 # ---------- Parameters ----------
 W, H = 2000, 1500     # world size
-N = 1500     # initial number of boids                
+N = 100     # initial number of boids                
 visual_range = 40.0 
 protected_range = 8.0 
 centering_factor = 0.0005
