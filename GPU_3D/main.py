@@ -10,7 +10,7 @@ import matplotlib.animation as animation
 from mpl_toolkits.mplot3d import Axes3D
 
 # ---------- Simulation parameters ----------
-W, H, D = 6000, 1500, 1500
+W, H, D = 1500, 6000, 1500
 N = 3000
 
 # Prey Physics
@@ -188,7 +188,7 @@ __global__ void update_boids_3d(
 """
 
 def draw_simulation_box(ax, width, height, depth):
-    color = '#4aa3ff'
+    color = "#000000"
     alpha = 0.2
     edges = [([0, W], [0, 0], [0, 0]), ([W, W], [0, H], [0, 0]), ([W, 0], [H, H], [0, 0]), ([0, 0], [H, 0], [0, 0]), ([0, W], [0, 0], [D, D]), ([W, W], [0, H], [D, D]), ([W, 0], [H, H], [D, D]), ([0, 0], [H, 0], [D, D]), ([0, 0], [0, 0], [0, D]), ([W, W], [0, 0], [0, D]), ([W, W], [H, H], [0, D]), ([0, 0], [H, H], [0, D])]
     for (xs, ys, zs) in edges: ax.plot(xs, ys, zs, c=color, alpha=alpha, linewidth=1.0)
@@ -210,15 +210,15 @@ def main():
   colors = np.zeros((N, 4))
   for i in range(N):
       bg = bias_group[i]
-      if bg == 0: colors[i] = [0.0, 1.0, 1.0, 0.8] # Cyan
-      elif bg == 1: colors[i] = [1.0, 0.0, 1.0, 0.8] # Magenta
-      elif bg == 2: colors[i] = [1.0, 1.0, 0.0, 0.8] # Yellow
-      else: colors[i] = [0.2, 1.0, 0.2, 0.8] # Green
+      if bg == 0:   colors[i] = [1.0, 0.9, 0.0, 1.0] # Electric Yellow (Yellow Tang)
+      elif bg == 1: colors[i] = [1.0, 0.4, 0.2, 1.0] # Deep Coral (Clownfish)
+      elif bg == 2: colors[i] = [0.2, 0.5, 1.0, 1.0] # Neon Blue (Blue Tang)
+      else:         colors[i] = [0.0, 1.0, 0.5, 1.0] # Seafoam Green (Anemone/Algae)
 
   fig = plt.figure(figsize=(10, 8))
-  fig.patch.set_facecolor('#07111a')
+  fig.patch.set_facecolor("#acb3b9")
   ax = fig.add_subplot(111, projection='3d')
-  ax.set_facecolor('#07111a')
+  ax.set_facecolor('#acb3b9')
   ax.xaxis.set_pane_color((0,0,0,0)); ax.yaxis.set_pane_color((0,0,0,0)); ax.zaxis.set_pane_color((0,0,0,0))
   draw_simulation_box(ax, W, H, D)
   ax.set_xlim(0, W); ax.set_ylim(0, H); ax.set_zlim(0, D)
