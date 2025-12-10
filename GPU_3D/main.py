@@ -5,9 +5,9 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
 import pycuda.gpuarray as gpuarray
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from mpl_toolkits.mplot3d import Axes3D
+from vispy import app, scene
+from vispy.scene import visuals
+from vispy.visuals import LineVisual
 
 # ---------- Simulation parameters ----------
 W, H, D = 1500, 6000, 1500
@@ -187,11 +187,20 @@ __global__ void update_boids_3d(
 }
 """
 
-def draw_simulation_box(ax, width, height, depth):
-    color = "#000000"
-    alpha = 0.2
-    edges = [([0, W], [0, 0], [0, 0]), ([W, W], [0, H], [0, 0]), ([W, 0], [H, H], [0, 0]), ([0, 0], [H, 0], [0, 0]), ([0, W], [0, 0], [D, D]), ([W, W], [0, H], [D, D]), ([W, 0], [H, H], [D, D]), ([0, 0], [H, 0], [D, D]), ([0, 0], [0, 0], [0, D]), ([W, W], [0, 0], [0, D]), ([W, W], [H, H], [0, D]), ([0, 0], [H, H], [0, D])]
-    for (xs, ys, zs) in edges: ax.plot(xs, ys, zs, c=color, alpha=alpha, linewidth=1.0)
+def create_box_lines():
+    """Create vertices for box edges"""
+    vertices = np.array([
+        [0, 0, 0], [W, 0, 0], [W, H, 0], [0, H, 0],  # bottom face
+        [0, 0, D], [W, 0, D], [W, H, D], [0, H, D],  # top face
+    ], dtype=np.float32)
+    
+    edges = np.array([
+        [0, 1], [1, 2], [2, 3], [3, 0],  # bottom
+        [4, 5], [5, 6], [6, 7], [7, 4],  # top
+        [0, 4], [1, 5], [2, 6], [3, 7],  # vertical
+    ], dtype=np.uint32)
+    
+    return vertices, edges
 
 def main():
   pos, vel, bias_group, bias_val = create_boids_3d(N)
@@ -207,52 +216,66 @@ def main():
   mod = SourceModule(kernel_code)
   update = mod.get_function("update_boids_3d")
 
-  colors = np.zeros((N, 4))
+  # Create color array based on bias groups
+  colors = np.zeros((N, 3), dtype=np.float32)
   for i in range(N):
       bg = bias_group[i]
-      if bg == 0:   colors[i] = [1.0, 0.9, 0.0, 1.0] # Electric Yellow (Yellow Tang)
-      elif bg == 1: colors[i] = [1.0, 0.4, 0.2, 1.0] # Deep Coral (Clownfish)
-      elif bg == 2: colors[i] = [0.2, 0.5, 1.0, 1.0] # Neon Blue (Blue Tang)
-      else:         colors[i] = [0.0, 1.0, 0.5, 1.0] # Seafoam Green (Anemone/Algae)
+      if bg == 0:   colors[i] = [1.0, 0.9, 0.0]  # Electric Yellow
+      elif bg == 1: colors[i] = [1.0, 0.4, 0.2]  # Deep Coral
+      elif bg == 2: colors[i] = [0.2, 0.5, 1.0]  # Neon Blue
+      else:         colors[i] = [0.0, 1.0, 0.5]  # Seafoam Green
 
-  fig = plt.figure(figsize=(10, 8))
-  fig.patch.set_facecolor("#acb3b9")
-  ax = fig.add_subplot(111, projection='3d')
-  ax.set_facecolor('#acb3b9')
-  ax.xaxis.set_pane_color((0,0,0,0)); ax.yaxis.set_pane_color((0,0,0,0)); ax.zaxis.set_pane_color((0,0,0,0))
-  draw_simulation_box(ax, W, H, D)
-  ax.set_xlim(0, W); ax.set_ylim(0, H); ax.set_zlim(0, D)
-  max_range = np.array([W, H, D]).max()
-  ax.set_box_aspect((W/max_range, H/max_range, D/max_range))
-  ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-  ax.grid(False)
+  # Create vispy canvas
+  canvas = scene.SceneCanvas(keys='interactive', show=True, bgcolor='#acb3b9', size=(1000, 800), title='3D Boids vs Predator')
+  view = canvas.central_widget.add_view()
+  view.bgcolor = '#acb3b9'
+  view.camera = scene.TurntableCamera(up='z', fov=60, distance=5000)
+  view.camera.center = (W/2, H/2, D/2)
 
-  # Prey scatter
-  scat = ax.scatter(pos[:,0], pos[:,1], pos[:,2], s=5.0, c=colors, depthshade=True)
-  # PREDATOR scatter (Big Red Dot)
-  scat_pred = ax.scatter([pred_pos[0]], [pred_pos[1]], [pred_pos[2]], s=150.0, c='red', edgecolors='white', depthshade=False)
+  # Draw bounding box
+  box_vertices, box_edges = create_box_lines()
+  box_lines = visuals.Line(box_vertices, connect=box_edges, color='black', width=1.0, parent=view.scene)
+  view.add(box_lines)
 
-  ax.set_title(f"3D Foids vs Predator", color='#e6eef6')
-  fps_text = ax.text2D(0.02, 0.95, "", transform=ax.transAxes, color='#e6eef6')
+  # Create prey scatter
+  prey_pos = np.column_stack((pos_x_dev.get(), pos_y_dev.get(), pos_z_dev.get())).astype(np.float32)
+  scatter = scene.visuals.Markers()
+  scatter.set_data(prey_pos, edge_width=0, face_color=colors, size=5)
+  view.add(scatter)
+
+  # Create predator marker
+  pred_marker = scene.visuals.Markers()
+  pred_marker.set_data(np.array([pred_pos], dtype=np.float32), edge_width=2, face_color='red', edge_color='white', size=15)
+  view.add(pred_marker)
+
+  # FPS counter as overlay text
+  fps_text = scene.visuals.Text('FPS: 0', pos=(50, 20), font_size=16, color='white', parent=canvas.scene)
+  fps_text.transform = scene.transforms.STTransform()
+  # Boid count overlay
+  boid_text = scene.visuals.Text(f'N = {N}', pos=(50, 45), font_size=16, color='white', parent=canvas.scene)
+  boid_text.transform = scene.transforms.STTransform()
 
   threads_per_block = 128
   blocks = (N + threads_per_block - 1) // threads_per_block
+  # Number of recent frame times to use when averaging FPS (increase for smoother, longer-term average)
+  fps_history_length = 10000
   frame_times = []
+  frame_count = [0]
 
-  def animate(frame):
+  def on_timer(event):
     t0 = time.perf_counter()
     
-    # 1. Update Predator (CPU side simplest for single entity)
+    # 1. Update Predator
     global pred_pos, pred_vel
     pred_pos += pred_vel * dt
     # Bounce predator off walls
     if pred_pos[0] < 0 or pred_pos[0] > W: pred_vel[0] *= -1
     if pred_pos[1] < 0 or pred_pos[1] > H: pred_vel[1] *= -1
     if pred_pos[2] < 0 or pred_pos[2] > D: pred_vel[2] *= -1
-    # Clamp predator positions to stay strictly in box
+    # Clamp to bounds
     pred_pos = np.clip(pred_pos, [1,1,1], [W-1, H-1, D-1])
 
-    # 2. Update Prey (GPU) - Pass predator coords to kernel
+    # 2. Update Prey (GPU)
     update(
       pos_x_dev, pos_y_dev, pos_z_dev,
       vel_x_dev, vel_y_dev, vel_z_dev,
@@ -262,28 +285,47 @@ def main():
       np.float32(centering_factor), np.float32(avoid_factor), np.float32(matching_factor),
       np.float32(turn_factor), np.float32(margin), np.float32(min_speed), np.float32(max_speed), np.float32(dt),
       np.int32(W), np.int32(H), np.int32(D), np.float32(fov_angle), np.float32(hostile_factor),
-      # NEW: Predator arguments
       np.float32(pred_pos[0]), np.float32(pred_pos[1]), np.float32(pred_pos[2]), 
       np.float32(predator_fear_range), np.float32(predator_avoid_factor),
       block=(threads_per_block, 1, 1), grid=(blocks, 1)
     )
 
-    # 3. Update Visuals
-    px = pos_x_dev.get(); py = pos_y_dev.get(); pz = pos_z_dev.get()
-    scat._offsets3d = (px, py, pz)
-    # Update predator scatter position (needs list of coordinates)
-    scat_pred._offsets3d = ([pred_pos[0]], [pred_pos[1]], [pred_pos[2]])
+    # 3. Update visuals
+    px = pos_x_dev.get()
+    py = pos_y_dev.get()
+    pz = pos_z_dev.get()
+    prey_pos = np.column_stack((px, py, pz)).astype(np.float32)
+    scatter.set_data(prey_pos, edge_width=0, face_color=colors, size=5)
+    
+    pred_marker.set_data(np.array([pred_pos], dtype=np.float32), edge_width=2, face_color='red', edge_color='white', size=15)
 
+    # Update FPS display
     t1 = time.perf_counter()
     frame_times.append((t1 - t0) * 1000.0)
-    if len(frame_times) > 50: frame_times.pop(0)
+    # Keep a longer history for a smoother FPS average
+    if len(frame_times) > fps_history_length:
+      frame_times.pop(0)
     if frame_times:
-        avg = sum(frame_times)/len(frame_times)
-        fps_text.set_text(f"FPS: {1000.0/avg:.1f}")
-    return scat, scat_pred
+        avg = sum(frame_times) / len(frame_times)
+        fps_text.text = f"FPS: {1000.0/avg:.1f}"
+    # Update boid count (static unless N changes at runtime)
+    boid_text.text = f'N = {N}'
+    
+    frame_count[0] += 1
+    canvas.update()
 
-  ani = animation.FuncAnimation(fig, animate, interval=1, blit=False)
-  plt.show()
+  # Set up timer to trigger updates
+  timer = app.Timer(interval=0.001, connect=on_timer, start=True)
+  
+  # Print instructions
+  print("Controls:")
+  print("  Mouse drag: Rotate view")
+  print("  Mouse scroll: Zoom in/out")
+  print("  Right-click drag: Pan view")
+  print("  Close window to exit")
+  
+  app.run()
+
 
 if __name__ == '__main__':
   main()
