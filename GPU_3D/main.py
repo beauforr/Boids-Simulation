@@ -249,7 +249,7 @@ def main():
   view.add(pred_marker)
 
   # FPS counter as overlay text
-  fps_text = scene.visuals.Text('FPS: 0', pos=(50, 20), font_size=16, color='white', parent=canvas.scene)
+  fps_text = scene.visuals.Text('FPS: 0', pos=(60, 20), font_size=16, color='white', parent=canvas.scene)
   fps_text.transform = scene.transforms.STTransform()
   # Boid count overlay
   boid_text = scene.visuals.Text(f'N = {N}', pos=(50, 45), font_size=16, color='white', parent=canvas.scene)
