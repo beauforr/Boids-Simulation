@@ -10,7 +10,7 @@ import matplotlib.animation as animation
 
 # ---------- Simulation parameters ----------
 W, H = 2000, 1500
-N = 500000                 # number of boids
+N = 300000                 # number of boids
 visual_range = 40.0
 protected_range = 8.0
 centering_factor = 0.0005
@@ -144,6 +144,250 @@ __global__ void update_boids(
   pos_x[i] = xi + new_vx * dt;
   pos_y[i] = yi + new_vy * dt;
 }
+
+// --- Tiled/shared-memory kernel: loads other boids in tiles into shared memory ---
+__global__ void update_boids_tiled(
+  float *pos_x, float *pos_y,
+  float *vel_x, float *vel_y,
+  int *bias_group, float *bias_val,
+  int N,
+  float visual_range, float protected_range,
+  float centering_factor, float avoid_factor, float matching_factor,
+  float turn_factor, float margin, float min_speed, float max_speed, float dt,
+  int W, int H)
+{
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+
+  float xi = pos_x[i];
+  float yi = pos_y[i];
+  float new_vx = vel_x[i];
+  float new_vy = vel_y[i];
+
+  float close_dx = 0.0f;
+  float close_dy = 0.0f;
+  float xavg = 0.0f;
+  float yavg = 0.0f;
+  float vxavg = 0.0f;
+  float vyavg = 0.0f;
+  int neighbors = 0;
+
+  float vr = visual_range;
+  float pr = protected_range;
+  float pr2 = pr * pr;
+  float vr2 = vr * vr;
+
+  extern __shared__ float sdata[];
+  float *s_pos_x = sdata;
+  float *s_pos_y = s_pos_x + blockDim.x;
+  float *s_vel_x = s_pos_y + blockDim.x;
+  float *s_vel_y = s_vel_x + blockDim.x;
+
+  int tiles = (N + blockDim.x - 1) / blockDim.x;
+  for (int t = 0; t < tiles; ++t) {
+    int idx = t * blockDim.x + threadIdx.x;
+    if (idx < N) {
+      s_pos_x[threadIdx.x] = pos_x[idx];
+      s_pos_y[threadIdx.x] = pos_y[idx];
+      s_vel_x[threadIdx.x] = vel_x[idx];
+      s_vel_y[threadIdx.x] = vel_y[idx];
+    } else {
+      s_pos_x[threadIdx.x] = 1e9f;
+      s_pos_y[threadIdx.x] = 1e9f;
+      s_vel_x[threadIdx.x] = 0.0f;
+      s_vel_y[threadIdx.x] = 0.0f;
+    }
+    __syncthreads();
+
+    int limit = min(blockDim.x, N - t * blockDim.x);
+    for (int j = 0; j < limit; ++j) {
+      int global_j = t * blockDim.x + j;
+      if (global_j == i) continue;
+      float dx = xi - s_pos_x[j];
+      float dy = yi - s_pos_y[j];
+      if (fabsf(dx) < vr && fabsf(dy) < vr) {
+        float sd = dx*dx + dy*dy;
+        if (sd < pr2) {
+          close_dx += dx;
+          close_dy += dy;
+        } else if (sd < vr2) {
+          xavg += s_pos_x[j];
+          yavg += s_pos_y[j];
+          vxavg += s_vel_x[j];
+          vyavg += s_vel_y[j];
+          neighbors += 1;
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  if (neighbors > 0) {
+    float inv = 1.0f / (float)neighbors;
+    xavg *= inv; yavg *= inv; vxavg *= inv; vyavg *= inv;
+    new_vx += (xavg - xi) * centering_factor + (vxavg - vel_x[i]) * matching_factor;
+    new_vy += (yavg - yi) * centering_factor + (vyavg - vel_y[i]) * matching_factor;
+  }
+
+  new_vx += close_dx * avoid_factor;
+  new_vy += close_dy * avoid_factor;
+
+  if (xi < margin) new_vx += turn_factor;
+  if (xi > (float)W - margin) new_vx -= turn_factor;
+  if (yi < margin) new_vy += turn_factor;
+  if (yi > (float)H - margin) new_vy -= turn_factor;
+
+  int bg = bias_group[i];
+  float bv = bias_val[i];
+  if (bg == 1) {
+    new_vx = (1.0f - bv) * new_vx + bv * 1.0f;
+  } else if (bg == -1) {
+    new_vx = (1.0f - bv) * new_vx + bv * -1.0f;
+  }
+
+  float sp = sqrtf(new_vx*new_vx + new_vy*new_vy);
+  if (sp == 0.0f) sp = 1e-8f;
+  if (sp > max_speed) {
+    float s = max_speed / sp;
+    new_vx *= s; new_vy *= s;
+  }
+  if (sp < min_speed) {
+    float s = min_speed / sp;
+    new_vx *= s; new_vy *= s;
+  }
+
+  vel_x[i] = new_vx; vel_y[i] = new_vy;
+  pos_x[i] = xi + new_vx * dt;
+  pos_y[i] = yi + new_vy * dt;
+}
+
+// --- Grid-based neighbor search: build linked-list grid on GPU ---
+__global__ void build_grid(
+  float *pos_x, float *pos_y,
+  int *head, int *next,
+  int N,
+  int grid_w, int grid_h,
+  float cell_size)
+{
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+
+  int gx = (int)(pos_x[i] / cell_size);
+  int gy = (int)(pos_y[i] / cell_size);
+  if (gx < 0) gx = 0; if (gx >= grid_w) gx = grid_w - 1;
+  if (gy < 0) gy = 0; if (gy >= grid_h) gy = grid_h - 1;
+  int cell = gy * grid_w + gx;
+
+  int old = atomicExch(&head[cell], i);
+  next[i] = old;
+}
+
+// --- Update kernel that uses grid linked-lists to restrict neighbor search ---
+__global__ void update_boids_grid(
+  float *pos_x, float *pos_y,
+  float *vel_x, float *vel_y,
+  int *bias_group, float *bias_val,
+  int *head, int *next,
+  int N,
+  int grid_w, int grid_h,
+  float cell_size,
+  float visual_range, float protected_range,
+  float centering_factor, float avoid_factor, float matching_factor,
+  float turn_factor, float margin, float min_speed, float max_speed, float dt,
+  int W, int H)
+{
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;
+
+  float xi = pos_x[i];
+  float yi = pos_y[i];
+  float new_vx = vel_x[i];
+  float new_vy = vel_y[i];
+
+  float close_dx = 0.0f;
+  float close_dy = 0.0f;
+  float xavg = 0.0f;
+  float yavg = 0.0f;
+  float vxavg = 0.0f;
+  float vyavg = 0.0f;
+  int neighbors = 0;
+
+  float vr = visual_range;
+  float pr = protected_range;
+  float pr2 = pr * pr;
+  float vr2 = vr * vr;
+
+  int gx = (int)(xi / cell_size);
+  int gy = (int)(yi / cell_size);
+  for (int oy = -1; oy <= 1; ++oy) {
+    int ny = gy + oy;
+    if (ny < 0 || ny >= grid_h) continue;
+    for (int ox = -1; ox <= 1; ++ox) {
+      int nx = gx + ox;
+      if (nx < 0 || nx >= grid_w) continue;
+      int cell = ny * grid_w + nx;
+      int j = head[cell];
+      while (j != -1) {
+        if (j != i) {
+          float dx = xi - pos_x[j];
+          float dy = yi - pos_y[j];
+          if (fabsf(dx) < vr && fabsf(dy) < vr) {
+            float sd = dx*dx + dy*dy;
+            if (sd < pr2) {
+              close_dx += dx;
+              close_dy += dy;
+            } else if (sd < vr2) {
+              xavg += pos_x[j];
+              yavg += pos_y[j];
+              vxavg += vel_x[j];
+              vyavg += vel_y[j];
+              neighbors += 1;
+            }
+          }
+        }
+        j = next[j];
+      }
+    }
+  }
+
+  if (neighbors > 0) {
+    float inv = 1.0f / (float)neighbors;
+    xavg *= inv; yavg *= inv; vxavg *= inv; vyavg *= inv;
+    new_vx += (xavg - xi) * centering_factor + (vxavg - vel_x[i]) * matching_factor;
+    new_vy += (yavg - yi) * centering_factor + (vyavg - vel_y[i]) * matching_factor;
+  }
+
+  new_vx += close_dx * avoid_factor;
+  new_vy += close_dy * avoid_factor;
+
+  if (xi < margin) new_vx += turn_factor;
+  if (xi > (float)W - margin) new_vx -= turn_factor;
+  if (yi < margin) new_vy += turn_factor;
+  if (yi > (float)H - margin) new_vy -= turn_factor;
+
+  int bg = bias_group[i];
+  float bv = bias_val[i];
+  if (bg == 1) {
+    new_vx = (1.0f - bv) * new_vx + bv * 1.0f;
+  } else if (bg == -1) {
+    new_vx = (1.0f - bv) * new_vx + bv * -1.0f;
+  }
+
+  float sp = sqrtf(new_vx*new_vx + new_vy*new_vy);
+  if (sp == 0.0f) sp = 1e-8f;
+  if (sp > max_speed) {
+    float s = max_speed / sp;
+    new_vx *= s; new_vy *= s;
+  }
+  if (sp < min_speed) {
+    float s = min_speed / sp;
+    new_vx *= s; new_vy *= s;
+  }
+
+  vel_x[i] = new_vx; vel_y[i] = new_vy;
+  pos_x[i] = xi + new_vx * dt;
+  pos_y[i] = yi + new_vy * dt;
+}
 }
 """
 
@@ -166,9 +410,6 @@ def main():
   bias_group_dev = gpuarray.to_gpu(bias_group.astype(np.int32))
   bias_val_dev = gpuarray.to_gpu(bias_val.astype(np.float32))
 
-  # compile kernel
-  mod = SourceModule(kernel_code)
-  update = mod.get_function("update_boids")
 
   # debug prints: environment and initial state
   try:
@@ -198,22 +439,76 @@ def main():
   threads_per_block = 128
   blocks = (N + threads_per_block - 1) // threads_per_block
 
+  # compile kernel and choose implementation
+  # choose implementation: grid-based, tiled/shared or naive
+  use_grid = False
+  use_tiled = False
+  mod = SourceModule(kernel_code)
+  build_grid_fn = mod.get_function("build_grid")
+  update_grid_fn = mod.get_function("update_boids_grid")
+  update_tiled_fn = mod.get_function("update_boids_tiled")
+  update_naive_fn = mod.get_function("update_boids")
+
+  # grid parameters (uniform grid)
+  cell_size = visual_range
+  grid_w = int(math.ceil(W / cell_size))
+  grid_h = int(math.ceil(H / cell_size))
+  num_cells = grid_w * grid_h
+
+  # allocate head and next arrays for grid linked-list (on device)
+  head_dev = gpuarray.empty(num_cells, dtype=np.int32)
+  next_dev = gpuarray.empty(N, dtype=np.int32)
+
+  # prepare which update function and shared bytes
+  if use_grid:
+    update = update_grid_fn
+    shared_bytes = 0
+  elif use_tiled:
+    update = update_tiled_fn
+    shared_bytes = int(threads_per_block * 4 * np.dtype(np.float32).itemsize)
+  else:
+    update = update_naive_fn
+    shared_bytes = 0
+
   frame_times = []
 
   def animate(frame):
     t0 = time.perf_counter()
-    # launch kernel: arguments must match signature
-    update(
-      pos_x_dev, pos_y_dev,
-      vel_x_dev, vel_y_dev,
-      bias_group_dev, bias_val_dev,
-      np.int32(N),
-      np.float32(visual_range), np.float32(protected_range),
-      np.float32(centering_factor), np.float32(avoid_factor), np.float32(matching_factor),
-      np.float32(turn_factor), np.float32(margin), np.float32(min_speed), np.float32(max_speed), np.float32(dt),
-      np.int32(W), np.int32(H),
-      block=(threads_per_block, 1, 1), grid=(blocks, 1)
-    )
+    # build grid (if enabled) and launch selected update kernel
+    if use_grid:
+      # reset head array to -1 (use GPUArray.fill to allow negative values)
+      head_dev.fill(np.int32(-1))
+      build_grid_fn(
+        pos_x_dev, pos_y_dev,
+        head_dev, next_dev,
+        np.int32(N), np.int32(grid_w), np.int32(grid_h), np.float32(cell_size),
+        block=(threads_per_block, 1, 1), grid=(blocks, 1)
+      )
+      # update using grid
+      update(
+        pos_x_dev, pos_y_dev,
+        vel_x_dev, vel_y_dev,
+        bias_group_dev, bias_val_dev,
+        head_dev, next_dev,
+        np.int32(N), np.int32(grid_w), np.int32(grid_h), np.float32(cell_size),
+        np.float32(visual_range), np.float32(protected_range),
+        np.float32(centering_factor), np.float32(avoid_factor), np.float32(matching_factor),
+        np.float32(turn_factor), np.float32(margin), np.float32(min_speed), np.float32(max_speed), np.float32(dt),
+        np.int32(W), np.int32(H),
+        block=(threads_per_block, 1, 1), grid=(blocks, 1)
+      )
+    else:
+      update(
+        pos_x_dev, pos_y_dev,
+        vel_x_dev, vel_y_dev,
+        bias_group_dev, bias_val_dev,
+        np.int32(N),
+        np.float32(visual_range), np.float32(protected_range),
+        np.float32(centering_factor), np.float32(avoid_factor), np.float32(matching_factor),
+        np.float32(turn_factor), np.float32(margin), np.float32(min_speed), np.float32(max_speed), np.float32(dt),
+        np.int32(W), np.int32(H),
+        block=(threads_per_block, 1, 1), grid=(blocks, 1), shared=shared_bytes
+      )
 
     # copy back positions for plotting
     px = pos_x_dev.get()
@@ -230,7 +525,7 @@ def main():
 
     t1 = time.perf_counter()
     frame_times.append((t1 - t0) * 1000.0)
-    if len(frame_times) > 200:
+    if len(frame_times) > 5000:
       frame_times.pop(0)
     # update title with FPS
     if frame_times:
